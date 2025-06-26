@@ -22,3 +22,5 @@
 2. 点击错误对话框中的"Error Fixer Online"按钮
 3. 或点击节点右上角的🔧图标
 4. 自动跳转到解决方案网站
+   
+![](error_dialog.png)
