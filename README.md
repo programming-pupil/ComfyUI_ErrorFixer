@@ -3,7 +3,7 @@
 自动捕获ComfyUI工作流错误并提供修复建议的插件。
 
 ## 安装方法
-1. 下载 https://github.com/programming-pupil/ComfyUI_ErrorFixer/archive/refs/tags/V1.0.0_RELEASE.tar.gz
+1. 下载 https://github.com/programming-pupil/ComfyUI_ErrorFixer/archive/refs/tags/V1.0.1_RELEASE.tar.gz
 1. 将此项目解压缩到 `ComfyUI/custom_nodes/` 目录下，且重命名为 ComfyUI_ErrorFixer
 2. 重启 ComfyUI
 3. 插件会自动加载并开始工作
