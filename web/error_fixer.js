@@ -1,246 +1,194 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// 全局变量，存储最后一次API错误
 let lastApiError = null;
 
 function setupExecutionErrorListener() {
     api.addEventListener("execution_error", (e) => {
         const errorData = e.detail;
         console.log("🔧 [API] High-quality error event captured:", errorData);
-        
         lastApiError = {
+            ...errorData,
             type: 'execution_error',
-            nodeId: errorData.node_id,
-            nodeType: errorData.node_type,
-            message: errorData.exception_message,
-            traceback: errorData.traceback,
-            timestamp: new Date().toISOString(),
             captureTime: Date.now(),
             workflow: getWorkflowData()
         };
-        
         if (errorData.node_id) {
-            setTimeout(() => addErrorMarkerToNode(errorData.node_id, lastApiError), 200);
+            setTimeout(() => addErrorMarkerToNode(errorData.node_id, lastApiError), 100);
         }
     });
 }
 
-function observeErrorDialogs() {
-    console.log("🔧 Starting to observe error dialogs...");
-    
+function observeForAnchor() {
     const observer = new MutationObserver((mutations) => {
-        mutations.forEach((mutation) => {
-            mutation.addedNodes.forEach((node) => {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
                 if (node.nodeType === Node.ELEMENT_NODE) {
-                    checkForErrorDialog(node);
+                    inspectForAnchorAndInject(node);
                 }
-            });
-        });
+            }
+        }
     });
-    
+
     observer.observe(document.body, {
         childList: true,
-        subtree: true
+        subtree: true,
     });
-    
-    // 也检查已存在的元素
-    setTimeout(() => {
-        const existingDialogs = document.querySelectorAll('div, [class*="modal"], [class*="dialog"], [class*="popup"]');
-        existingDialogs.forEach(checkForErrorDialog);
-    }, 1000);
+    console.log("🔧 Header Injector is now active. Looking for 'Show Report' button...");
 }
 
-function checkForErrorDialog(element) {
-    try {
-        // 避免在自己的按钮上触发
-        if (element.closest('.error-fixer-button-container') || element.classList.contains('error-fixer-button')) {
+function inspectForAnchorAndInject(element) {
+    const anchorButton = findReportButton(element);
+
+    if (anchorButton) {
+        const dialogContainer = anchorButton.closest('.litemodal-dialog, .comfy-modal, [role="dialog"]');
+        if (!dialogContainer) {
+            console.warn("🔧 Found anchor, but couldn't find a parent dialog container.");
             return;
         }
 
-        const textContent = element.textContent || element.innerText || '';
+        const closeButton = dialogContainer.querySelector('button.close, a.close, [aria-label="Close"], [aria-label="关闭"], .litemodal-close');
         
-        // 多种错误模式检测（参考工作版本）
-        const errorPatterns = [
-            /error/i,
-            /exception/i,
-            /failed/i,
-            /object has no attribute/i,
-            /nonetype/i,
-            /traceback/i,
-            /invalid/i,
-            /cannot/i,
-            /unable/i,
-            /错误/i,
-            /失败/i
-        ];
-        
-        const hasErrorText = errorPatterns.some(pattern => pattern.test(textContent));
-        
-        // 检查是否是弹窗样式（参考工作版本的判断逻辑）
-        const style = window.getComputedStyle(element);
-        const isModal = style.position === 'fixed' || style.position === 'absolute';
-        const hasHighZIndex = parseInt(style.zIndex) > 100;
-        
-        if (hasErrorText && (isModal || hasHighZIndex || element.offsetParent === document.body)) {
-            console.log("🔧 Found potential error dialog:", element);
-            handleErrorDialog(element, textContent);
-        }
-        
-        // 特别检查ComfyUI特定错误
-        if (textContent.includes("'NoneType' object has no attribute 'shape'") || 
-            textContent.includes("K采样器") ||
-            textContent.includes("帮助修复这个")) {
-            console.log("🔧 Found ComfyUI specific error dialog:", element);
-            handleErrorDialog(element, textContent);
-        }
-        
-    } catch (e) {
-        // 忽略检查错误
-    }
-}
-
-function handleErrorDialog(dialogElement, errorText) {
-    try {
-        console.log("🔧 Processing error dialog:", errorText.substring(0, 100));
-        
-        // 防止重复处理
-        if (dialogElement.querySelector('.error-fixer-button')) {
-            return;
-        }
-
-        let errorInfo;
-        const now = Date.now();
-
-        if (lastApiError && (now - lastApiError.captureTime) < 3000) {
-            console.log("🔧 Using high-quality data from recent API event.");
-            errorInfo = lastApiError;
+        if (closeButton) {
+            const headerContainer = closeButton.parentNode;
+            handleHeaderInjection(headerContainer, dialogContainer); // 传入整个弹窗容器
         } else {
-            console.log("🔧 API data not found or too old. Falling back to parsing dialog text.");
-            
-            // 提取错误信息（参考工作版本）
-            let errorMessage = errorText.trim();
-            let nodeName = '';
-            let nodeType = '';
-            let nodeId = '';
-            
-            // 尝试从对话框标题中提取节点信息
-            const titleElement = dialogElement.querySelector('h1, h2, h3, .title, [class*="title"]');
-            if (titleElement) {
-                const titleText = titleElement.textContent || titleElement.innerText;
-                if (titleText && titleText !== errorMessage) {
-                    nodeName = titleText.trim();
-                    nodeType = titleText.trim();
-                }
-            }
-            
-            // 从错误信息中提取节点ID
-            const nodeIdMatch = errorMessage.match(/node[^\d]*(\d+)/i);
-            if (nodeIdMatch) {
-                nodeId = nodeIdMatch[1];
-            }
-            
-            errorInfo = {
-                type: 'dialog_text_error',
-                message: errorMessage,
-                nodeName: nodeName,
-                nodeType: nodeType,
-                nodeId: nodeId,
-                timestamp: new Date().toISOString()
-            };
+             console.warn("🔧 Found dialog, but couldn't find a close button to anchor to the header.");
         }
-
-        // 添加按钮到对话框
-        addFixButtonToDialog(dialogElement, errorInfo);
-        
-        console.log("🔧 Error processed successfully");
-        
-    } catch (e) {
-        console.error("🔧 Error processing dialog:", e);
     }
 }
 
-function addFixButtonToDialog(dialogElement, errorInfo) {
+function handleHeaderInjection(headerContainer, dialogContainer) {
+    if (headerContainer.querySelector('.error-fixer-button')) {
+        return;
+    }
+
+    let errorInfo = getLatestErrorInfo(dialogContainer);
+    
+    const fixButton = createFixButton(errorInfo);
+    headerContainer.insertBefore(fixButton, headerContainer.querySelector('button.close, a.close, [aria-label="Close"], [aria-label="关闭"], .litemodal-close'));
+    console.log("🔧 Injected button into the dialog header.");
+}
+
+function findReportButton(element) {
+    const selector = 'button, a';
+    const elements = element.matches(selector) ? [element] : element.querySelectorAll(selector);
+    for (const el of elements) {
+        const text = el.textContent.trim();
+        if (text === "显示报告" || text === "Show Report") {
+            return el;
+        }
+    }
+    return null;
+}
+
+/**
+ * 获取最新的错误信息（优先API，其次解析净化后的弹窗文本）
+ * @param {HTMLElement} dialogContainer 
+ * @returns {object}
+ */
+function getLatestErrorInfo(dialogContainer) {
+    const now = Date.now();
+    if (lastApiError && (now - lastApiError.captureTime) < 5000) {
+        console.log("🔧 Using high-quality data from recent API event.");
+        return lastApiError;
+    } else {
+        console.log("🔧 Falling back to parsing dialog text.");
+        
+        const cleanedMessage = getCleanedErrorMessage(dialogContainer);
+
+        return {
+            type: 'dialog_text_error',
+            message: cleanedMessage, // 使用净化后的消息
+            nodeType: 'Unknown',
+            traceback: 'N/A',
+            timestamp: new Date().toISOString()
+        };
+    }
+}
+
+/**
+ * 克隆弹窗，移除不必要的UI元素，然后返回纯净的错误文本。
+ * @param {HTMLElement} dialogContainer 
+ * @returns {string}
+ */
+function getCleanedErrorMessage(dialogContainer) {
     try {
-        const fixButton = createFixButton(errorInfo);
-        
-        const insertionTargets = [
-            dialogElement.querySelector('.buttons'),
-            dialogElement.querySelector('.actions'),
-            dialogElement.querySelector('.footer'),
-            dialogElement.querySelector('button')?.parentNode,
-            dialogElement.querySelector('.comfy-manager-dialog-actions'), // ComfyUI-Manager
-            dialogElement.querySelector('.dialog_actions'),
-            dialogElement.querySelector('.comfy-modal-actions'),
-            dialogElement.querySelector('.dialog_content'),
-            dialogElement.querySelector('.modal_content'),
-            dialogElement // 最终备选
+        // 1. 克隆节点，避免修改用户正在看的界面
+        const clone = dialogContainer.cloneNode(true);
+
+        // 2. 定义要移除的UI元素的选择器列表
+        const SELECTORS_TO_REMOVE = [
+            // 移除整个头部（包含标题"提示执行失败"和关闭按钮）
+            '.litemodal-header', 
+            '.p-dialog-header',
+            // 移除整个底部/操作区（包含"显示报告"和"帮助修复这个"按钮）
+            '.litemodal-buttons',
+            '.p-dialog-footer',
+            '.flex.gap-2.justify-center', // 你提供的HTML结构中的按钮容器
+            // 移除我们自己注入的按钮，以防万一
+            '.error-fixer-button'
         ];
-        
-        let buttonAdded = false;
-        for (const target of insertionTargets) {
-            if (target) {
-                console.log("🔧 Adding button to dialog target:", target.className || target.nodeName);
-                target.appendChild(fixButton);
-                buttonAdded = true;
-                break;
+
+        // 3. 在克隆节点上执行移除操作
+        SELECTORS_TO_REMOVE.forEach(selector => {
+            const elementToRemove = clone.querySelector(selector);
+            if (elementToRemove) {
+                elementToRemove.remove();
             }
-        }
-        
-        if (!buttonAdded) {
-            console.log("🔧 Creating new button container");
-            const buttonContainer = document.createElement('div');
-            buttonContainer.className = 'error-fixer-button-container';
-            buttonContainer.style.cssText = `
-                text-align: center !important;
-                padding: 10px !important;
-                border-top: 1px solid #333 !important;
-                margin-top: 10px !important;
-            `;
-            buttonContainer.appendChild(fixButton);
-            dialogElement.appendChild(buttonContainer);
-        }
-        
+        });
+
+        // 4. 从净化后的克隆中提取文本
+        let cleanedText = clone.textContent || "";
+
+        // 5. 做最后的文本清理，去除多余的换行和空格
+        cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+
+        cleanedText = cleanedText.replace('查找问题', ' ').trim();
+        cleanedText = cleanedText.replace('提示执行失败', ' ').trim();
+
+        console.log("🔧 Cleaned error message:", cleanedText.substring(0, 150) + "...");
+        return cleanedText.substring(0, 2000); // 限制长度
+
     } catch (e) {
-        console.error("🔧 Error adding button to dialog:", e);
+        console.error("🔧 Error while cleaning message:", e);
+        // 如果净化失败，返回原始文本作为备用
+        return (dialogContainer.textContent || "").trim().substring(0, 2000);
     }
 }
 
+
+/**
+ * 创建按钮
+ * @param {object} errorInfo 
+ * @returns {HTMLElement}
+ */
 function createFixButton(errorInfo) {
     const button = document.createElement('button');
+    button.type = 'button';
     button.className = 'error-fixer-button';
     button.innerHTML = '🔧 Error Fixer Online';
     
-    // 使用工作版本的样式
-    button.style.cssText = `
-        background: #ff6b35 !important;
-        color: white !important;
-        border: none !important;
-        padding: 8px 16px !important;
-        border-radius: 6px !important;
-        cursor: pointer !important;
-        margin: 10px 5px !important;
-        font-size: 14px !important;
-        font-weight: bold !important;
-        transition: all 0.3s ease !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
-        z-index: 10000 !important;
-        display: inline-block !important;
-    `;
-    
-    button.addEventListener('mouseenter', () => {
-        button.style.background = '#e55a2b';
-        button.style.transform = 'translateY(-1px)';
-    });
-    
-    button.addEventListener('mouseleave', () => {
-        button.style.background = '#ff6b35';
-        button.style.transform = 'translateY(0)';
+    Object.assign(button.style, {
+        background: '#ff6b35',
+        color: 'white',
+        border: 'none',
+        padding: '8px 16px',
+        borderRadius: '8px', // 圆角
+        cursor: 'pointer',
+        margin: '0 10px 0 0', // 和关闭按钮之间留出间距
+        fontSize: '14px',
+        fontWeight: 'bold',
+        display: 'inline-flex', // 让图标和文字对齐
+        alignItems: 'center',
+        gap: '6px', // 图标和文字的间距
+        lineHeight: '1',
     });
     
     button.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        console.log("🔧 Fix button clicked for error:", errorInfo.message);
         openErrorFixPage(errorInfo);
     });
     
@@ -248,10 +196,10 @@ function createFixButton(errorInfo) {
 }
 
 function openErrorFixPage(errorInfo) {
+    console.log('errorInfo:' , errorInfo)
     const baseUrl = "https://bug.aix.ink";
     const params = new URLSearchParams({
-        q: errorInfo.message,
-        source: 'comfyui_plugin_final'
+        q: errorInfo.message || errorInfo.exception_message || 'N/A'
     });
     window.open(`${baseUrl}?${params.toString()}`, '_blank');
 }
@@ -309,16 +257,16 @@ function addErrorMarkerToNode(nodeId, errorInfo) {
     app.canvas?.setDirty(true, true);
 }
 
+
 // 插件注册
 app.registerExtension({
-    name: "ComfyUI.ErrorFixer.Final",
+    name: "ComfyUI.ErrorFixer.HeaderInjectV6",
     async setup() {
-        console.log("🔧 Error Fixer Plugin [Final Version] Loaded. Using robust DOM observation.");
-        
+        console.log("🔧 Error Fixer Plugin [V6 Header Inject] Loaded. Final version.");
         setTimeout(() => {
-            observeErrorDialogs();
             setupExecutionErrorListener();
-            console.log("🔧 Error monitoring started.");
-        }, 2000);
+            observeForAnchor();
+            console.log("🔧 Error monitoring system is fully initialized.");
+        }, 1000);
     }
 });
